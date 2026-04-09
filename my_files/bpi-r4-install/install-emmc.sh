@@ -1,12 +1,12 @@
 #!/bin/sh
-# install-emmc.sh ó Install OpenWrt to eMMC
+# install-emmc.sh — Install OpenWrt to eMMC
 # Must be run from NAND rescue system only!
 
 EMMC_IMG="/tmp/emmc-img.bin"
 EMMC_DEV="/dev/mmcblk0"
 EMMC_BOOT="/dev/mmcblk0boot0"
 GH_USER="woziwrt"
-GH_REPO="bpi-r4-rescue"
+GH_REPO="bpi-r4-deploy"
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -56,73 +56,103 @@ fi
 printf "        OK -- found %s (eMMC confirmed via %s)\n" "$EMMC_DEV" "$EMMC_BOOT"
 printf "\n"
 
-# || 3. Release source |||||||||||||||||||||||||||||||||||||||||||||||||||||||
+# || 3. File source ||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
 
-printf "[ 3/7 ] Release source...\n"
+printf "[ 3/7 ] File source...\n"
 printf "\n"
-printf "  Use default release or your own fork?\n"
-printf "  [1] Default (woziwrt/bpi-r4-rescue)\n"
-printf "  [2] My fork (same repo name, different username)\n"
+printf "  [1] Download from GitHub (default)\n"
+printf "  [2] Use local files from /tmp (development/testing)\n"
 printf "\n"
 printf "  Select [1/2]: "
-read USE_FORK
+read USE_LOCAL
 
-case "$USE_FORK" in
+case "$USE_LOCAL" in
     2)
         printf "\n"
-        printf "        INFO: Fork repo name must remain 'bpi-r4-rescue'\n"
-        printf "        Enter your GitHub username: "
-        read GH_USER
+        printf "        INFO: Using local files from /tmp\n"
+        printf "        Checking files...\n"
+        if [ ! -f "$EMMC_IMG" ]; then
+            printf "${RED}ERROR: %s not found!${NC}\n" "$EMMC_IMG"
+            exit 1
+        fi
+        printf "        OK -- file present\n\n"
         ;;
     *)
+        printf "\n"
+        printf "  Use default release or your own fork?\n"
+        printf "  [1] Default (woziwrt/bpi-r4-deploy)\n"
+        printf "  [2] My fork (same repo name, different username)\n"
+        printf "\n"
+        printf "  Select [1/2]: "
+        read USE_FORK
+
+        case "$USE_FORK" in
+            2)
+                printf "\n"
+                printf "        INFO: Fork repo name must remain 'bpi-r4-deploy'\n"
+                printf "        Enter your GitHub username: "
+                read GH_USER
+                ;;
+            *)
+                ;;
+        esac
+
+        EMMC_IMG_URL="https://github.com/${GH_USER}/${GH_REPO}/releases/download/release-sdcard/openwrt-mediatek-filogic-bananapi_bpi-r4-emmc-img.bin"
+        printf "        URL: %s\n" "$EMMC_IMG_URL"
+        printf "\n"
+
+        # || 4. Network check ||||||||||||||||||||||||||||||||||||||||||||||||
+
+        printf "[ 4/7 ] Network check...\n"
+        printf "\n"
+        printf "        INFO: Internet required (~103 MB download)\n"
+        printf "        Is ethernet connected? [yes/no]: "
+        read NET_CONFIRM
+
+        if [ "$NET_CONFIRM" != "yes" ]; then
+            printf "\n        Connect ethernet and run the script again.\n\n"
+            exit 0
+        fi
+
+        if ! ping -c 1 -W 3 github.com > /dev/null 2>&1; then
+            printf "\n"
+            printf "${RED}ERROR: No network connectivity -- check ethernet and try again.${NC}\n"
+            printf "\n"
+            exit 1
+        fi
+
+        printf "        OK -- network available\n\n"
+
+        printf "        Checking release availability...\n"
+        HTTP_CODE=$(wget --server-response --spider "$EMMC_IMG_URL" 2>&1 | grep "HTTP/" | tail -1 | awk "{print \$2}")
+        if [ "$HTTP_CODE" != "200" ]; then
+            printf "\n${RED}ERROR: Release not found on GitHub.${NC}\n"
+            printf "       The build has not been created yet.\n"
+            printf "       Please run the GitHub Actions workflow first:\n"
+            printf "       https://github.com/${GH_USER}/${GH_REPO}/actions\n\n"
+            exit 1
+        fi
+        printf "        OK -- release available\n\n"
+
+        # || 5. Download emmc-img.bin ||||||||||||||||||||||||||||||||||||||||
+
+        printf "[ 5/7 ] Downloading emmc-img.bin (~103 MB)...\n"
+        printf "\n"
+
+        wget -O "$EMMC_IMG" "$EMMC_IMG_URL"
+
+        if [ $? -ne 0 ] || [ ! -s "$EMMC_IMG" ]; then
+            printf "\n"
+            printf "${RED}ERROR: Download failed.${NC}\n"
+            printf "       Check network or URL and try again.\n"
+            printf "\n"
+            rm -f "$EMMC_IMG"
+            exit 1
+        fi
+
+        printf "\n        OK -- downloaded\n\n"
         ;;
 esac
-
-EMMC_IMG_URL="https://github.com/${GH_USER}/${GH_REPO}/releases/download/rescue-latest/openwrt-mediatek-filogic-bananapi_bpi-r4-emmc-img.bin"
-printf "        URL: %s\n" "$EMMC_IMG_URL"
-printf "\n"
-
-# || 4. Network check ||||||||||||||||||||||||||||||||||||||||||||||||||||||||
-
-printf "[ 4/7 ] Network check...\n"
-printf "\n"
-printf "        INFO: Internet required (~103 MB download)\n"
-printf "        Is ethernet connected? [yes/no]: "
-read NET_CONFIRM
-
-if [ "$NET_CONFIRM" != "yes" ]; then
-    printf "\n        Connect ethernet and run the script again.\n\n"
-    exit 0
-fi
-
-if ! ping -c 1 -W 3 github.com > /dev/null 2>&1; then
-    printf "\n"
-    printf "${RED}ERROR: No network connectivity -- check ethernet and try again.${NC}\n"
-    printf "\n"
-    exit 1
-fi
-
-printf "        OK -- network available\n"
-printf "\n"
-
-# || 5. Download emmc-img.bin ||||||||||||||||||||||||||||||||||||||||||||||||
-
-printf "[ 5/7 ] Downloading emmc-img.bin (~103 MB)...\n"
-printf "\n"
-
-wget -O "$EMMC_IMG" "$EMMC_IMG_URL"
-
-if [ $? -ne 0 ] || [ ! -s "$EMMC_IMG" ]; then
-    printf "\n"
-    printf "${RED}ERROR: Download failed.${NC}\n"
-    printf "       Check network or URL and try again.\n"
-    printf "\n"
-    rm -f "$EMMC_IMG"
-    exit 1
-fi
-
-printf "\n        OK -- downloaded\n"
-printf "\n"
 
 # || 6. Confirm and write ||||||||||||||||||||||||||||||||||||||||||||||||||||
 

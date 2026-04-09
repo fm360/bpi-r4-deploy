@@ -1,12 +1,13 @@
 #!/bin/sh
-# install-nvme.sh ó BPI-R4 NVMe install script
+# install-nvme.sh — BPI-R4 NVMe install script
 # Run from NAND rescue system
 
 NVME_DEV="/dev/nvme0n1"
-ITB="/tmp/bpi-r4.itb"
+
+ITB="/tmp/openwrt-mediatek-filogic-bananapi_bpi-r4-squashfs-sysupgrade.itb"
 IMG="/tmp/openwrt-mediatek-filogic-bananapi_bpi-r4-nvme-img.bin"
 GH_USER="woziwrt"
-GH_REPO="bpi-r4-rescue"
+GH_REPO="bpi-r4-deploy"
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
 GREEN='\033[0;32m'
@@ -150,102 +151,111 @@ if [ -z "$SMART_SKIP" ]; then
 
 fi
 
-# || 4. Release source |||||||||||||||||||||||||||||||||||||||||||||||||||||||
+# || 4. File source ||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
 
-printf "[ 4/7 ] Release source...\n"
+printf "[ 4/7 ] File source...\n"
 printf "\n"
-printf "  Use default release or your own fork?\n"
-printf "  [1] Default (woziwrt/bpi-r4-rescue)\n"
-printf "  [2] My fork (same repo name, different username)\n"
+printf "  [1] Download from GitHub (default)\n"
+printf "  [2] Use local files from /tmp (development/testing)\n"
 printf "\n"
 printf "  Select [1/2]: "
-read USE_FORK
+read USE_LOCAL
 
-case "$USE_FORK" in
+case "$USE_LOCAL" in
     2)
         printf "\n"
-        printf "        INFO: Fork repo name must remain 'bpi-r4-rescue'\n"
-        printf "        Enter your GitHub username: "
-        read GH_USER
+        printf "        INFO: Using local files from /tmp\n"
+        printf "        Checking files...\n"
+        if [ ! -f "$ITB" ]; then
+            printf "${RED}ERROR: %s not found!${NC}\n" "$ITB"
+            exit 1
+        fi
+        if [ ! -f "$IMG" ]; then
+            printf "${RED}ERROR: %s not found!${NC}\n" "$IMG"
+            exit 1
+        fi
+        printf "        OK -- both files present\n\n"
         ;;
     *)
+        printf "\n"
+        printf "  Use default release or your own fork?\n"
+        printf "  [1] Default (woziwrt/bpi-r4-deploy)\n"
+        printf "  [2] My fork (same repo name, different username)\n"
+        printf "\n"
+        printf "  Select [1/2]: "
+        read USE_FORK
+
+        case "$USE_FORK" in
+            2)
+                printf "\n"
+                printf "        INFO: Fork repo name must remain 'bpi-r4-deploy'\n"
+                printf "        Enter your GitHub username: "
+                read GH_USER
+                ;;
+            *)
+                ;;
+        esac
+
+        BASE_URL="https://github.com/${GH_USER}/${GH_REPO}/releases/download/release-nvme"
+        ITB_URL="${BASE_URL}/bpi-r4.itb"
+        IMG_URL="${BASE_URL}/openwrt-mediatek-filogic-bananapi_bpi-r4-nvme-img.bin"
+
+        printf "        URL: %s\n\n" "$BASE_URL"
+
+        printf "[ 5/7 ] Network check...\n"
+        printf "\n"
+        printf "        INFO: Internet required (~150 MB download)\n"
+        printf "        Is ethernet connected? [yes/no]: "
+        read NET_CONFIRM
+
+        if [ "$NET_CONFIRM" != "yes" ]; then
+            printf "\n        Connect ethernet and run the script again.\n\n"
+            exit 0
+        fi
+
+        if ! ping -c 1 -W 3 github.com > /dev/null 2>&1; then
+            printf "\n"
+            printf "${RED}ERROR: No network connectivity -- check ethernet and try again.${NC}\n"
+            printf "\n"
+            exit 1
+        fi
+
+        printf "        OK -- network available\n\n"
+
+        printf "        Checking release availability...\n"
+        HTTP_CODE=$(wget --server-response --spider "$ITB_URL" 2>&1 | grep "HTTP/" | tail -1 | awk "{print \$2}")
+        if [ "$HTTP_CODE" != "200" ]; then
+            printf "\n${RED}ERROR: Release not found on GitHub.${NC}\n"
+            printf "       The build has not been created yet.\n"
+            printf "       Please run the GitHub Actions workflow first:\n"
+            printf "       https://github.com/${GH_USER}/${GH_REPO}/actions\n\n"
+            exit 1
+        fi
+        printf "        OK -- release available\n\n"
+
+        printf "        Downloading bpi-r4.itb...\n"
+        wget -O "$ITB" "$ITB_URL"
+        if [ $? -ne 0 ] || [ ! -s "$ITB" ]; then
+            printf "\n${RED}ERROR: Download of bpi-r4.itb failed.${NC}\n\n"
+            rm -f "$ITB"
+            exit 1
+        fi
+        printf "        OK -- bpi-r4.itb downloaded\n\n"
+
+        printf "        Downloading nvme-img.bin...\n"
+        wget -O "$IMG" "$IMG_URL"
+        if [ $? -ne 0 ] || [ ! -s "$IMG" ]; then
+            printf "\n${RED}ERROR: Download of nvme-img.bin failed.${NC}\n\n"
+            rm -f "$ITB" "$IMG"
+            exit 1
+        fi
+        printf "        OK -- nvme-img.bin downloaded\n\n"
         ;;
 esac
 
-BASE_URL="https://github.com/${GH_USER}/${GH_REPO}/releases/download/rescue-latest"
-ITB_URL="${BASE_URL}/bpi-r4.itb"
-IMG_URL="${BASE_URL}/openwrt-mediatek-filogic-bananapi_bpi-r4-nvme-img.bin"
+# || 6. Write image |||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
 
-printf "        URL: %s\n" "$BASE_URL"
-printf "\n"
-
-# || 5. Network check + download |||||||||||||||||||||||||||||||||||||||||||||
-
-printf "[ 5/7 ] Network check...\n"
-printf "\n"
-printf "        INFO: Internet required (~50 MB download)\n"
-printf "        Is ethernet connected? [yes/no]: "
-read NET_CONFIRM
-
-if [ "$NET_CONFIRM" != "yes" ]; then
-    printf "\n        Connect ethernet and run the script again.\n\n"
-    exit 0
-fi
-
-if ! ping -c 1 -W 3 github.com > /dev/null 2>&1; then
-    printf "\n"
-    printf "${RED}ERROR: No network connectivity -- check ethernet and try again.${NC}\n"
-    printf "\n"
-    exit 1
-fi
-
-printf "        OK -- network available\n"
-printf "\n"
-
-# || 6. Detect install type + download |||||||||||||||||||||||||||||||||||||||
-
-printf "[ 6/7 ] Detecting install type...\n"
-
-if [ -b "/dev/nvme0n1p1" ] && [ -b "/dev/nvme0n1p2" ]; then
-    mkdir -p /mnt/nvme_check
-    if mount -t ext4 /dev/nvme0n1p1 /mnt/nvme_check 2>/dev/null; then
-        umount /mnt/nvme_check
-        INSTALL_TYPE="update"
-        printf "        Existing NVMe layout detected -- UPDATE mode\n"
-    else
-        INSTALL_TYPE="first"
-        printf "        Partitions exist but p1 is not ext4 -- FIRST INSTALL mode\n"
-    fi
-else
-    INSTALL_TYPE="first"
-    printf "        No valid layout detected -- FIRST INSTALL mode\n"
-fi
-
-printf "\n"
-
-printf "        Downloading bpi-r4.itb...\n"
-wget -O "$ITB" "$ITB_URL"
-if [ $? -ne 0 ] || [ ! -s "$ITB" ]; then
-    printf "\n${RED}ERROR: Download of bpi-r4.itb failed.${NC}\n\n"
-    rm -f "$ITB"
-    exit 1
-fi
-printf "        OK -- bpi-r4.itb downloaded\n\n"
-
-if [ "$INSTALL_TYPE" = "first" ]; then
-    printf "        Downloading nvme-img.bin...\n"
-    wget -O "$IMG" "$IMG_URL"
-    if [ $? -ne 0 ] || [ ! -s "$IMG" ]; then
-        printf "\n${RED}ERROR: Download of nvme-img.bin failed.${NC}\n\n"
-        rm -f "$ITB" "$IMG"
-        exit 1
-    fi
-    printf "        OK -- nvme-img.bin downloaded\n\n"
-fi
-
-# || 7. Write image |||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
-
-printf "[ 7/7 ] Writing image...\n"
+printf "[ 6/7 ] Writing image...\n"
 printf "\n"
 printf "${RED}  WARNING: This will ERASE ALL DATA on %s.${NC}\n" "$NVME_DEV"
 printf "\n"
@@ -268,21 +278,20 @@ if [ -n "$MOUNTED" ]; then
     done
 fi
 
-if [ "$INSTALL_TYPE" = "first" ]; then
-    printf "        Writing partition layout (nvme-img.bin)...\n"
-    dd if="$IMG" of="$NVME_DEV" bs=1M conv=fsync
-    if [ $? -ne 0 ]; then
-        printf "\n${RED}ERROR: dd nvme-img.bin failed.${NC}\n\n"
-        exit 1
-    fi
-    sync
-    partprobe "$NVME_DEV" 2>/dev/null
-    sleep 2
-    printf "        OK\n\n"
-    printf "        Formatting boot partition (p1 ext4)...\n"
-    mkfs.ext4 -F /dev/nvme0n1p1
-    printf "\n"
+printf "        Writing partition layout (nvme-img.bin)...\n"
+dd if="$IMG" of="$NVME_DEV" bs=1M conv=fsync
+if [ $? -ne 0 ]; then
+    printf "\n${RED}ERROR: dd nvme-img.bin failed.${NC}\n\n"
+    exit 1
 fi
+sync
+partprobe "$NVME_DEV" 2>/dev/null
+sleep 2
+printf "        OK\n\n"
+
+printf "        Formatting boot partition (p1 ext4)...\n"
+mkfs.ext4 -F /dev/nvme0n1p1
+printf "        OK\n\n"
 
 printf "        Writing kernel to p1...\n"
 mkdir -p /mnt/nvme
@@ -301,7 +310,20 @@ fi
 sync
 printf "        OK -- rootfs written to p2\n\n"
 
+printf "        Creating data partition (p3)...\n"
+sgdisk -e /dev/nvme0n1
+sgdisk -n 3:0:0 -t 3:8300 -c 3:data /dev/nvme0n1
+partprobe /dev/nvme0n1
+sleep 2
+umount /dev/nvme0n1p3 2>/dev/null || true
+mkfs.ext4 -F -L data /dev/nvme0n1p3
+printf "        OK -- p3 data partition created\n\n"
+
 rm -f "$ITB" "$IMG"
+
+# || 7. Finalize |||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
+
+printf "[ 7/7 ] Finalizing...\n\n"
 
 printf "        Setting U-Boot env for NVMe boot...\n"
 fw_setenv nvme_boot 1
@@ -313,14 +335,7 @@ fi
 printf "\n"
 
 printf "${GREEN}=================================================${NC}\n"
-printf "${GREEN}  Installation complete!${NC}\n"
-printf "${GREEN}=================================================${NC}\n"
-printf "\n"
-
-if [ "$INSTALL_TYPE" = "first" ]; then
-    printf "  Rebooting into NVMe system...\n\n"
-else
-    printf "  Rebooting...\n\n"
-fi
+printf "${GREEN}  Installation complete! Rebooting...${NC}\n"
+printf "${GREEN}=================================================${NC}\n\n"
 sleep 2
 reboot
